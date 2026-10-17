@@ -34,8 +34,14 @@ class SessionViewModel: ObservableObject {
     }
 
     // Frame sources
-    @Published var activeFrameSource: FrameSourceType = .iPhone {
-        didSet { switchFrameSource() }
+    // Remembered across launches; started when the bridge connects
+    private static let frameSourceKey = "ActiveFrameSource"
+    @Published var activeFrameSource: FrameSourceType =
+        FrameSourceType(rawValue: UserDefaults.standard.string(forKey: frameSourceKey) ?? "") ?? .iPhone {
+        didSet {
+            UserDefaults.standard.set(activeFrameSource.rawValue, forKey: Self.frameSourceKey)
+            switchFrameSource()
+        }
     }
     @Published var frameSourceStatus: FrameSourceStatus = .disconnected
     @Published var rayBanFrame: UIImage?
@@ -293,6 +299,7 @@ class SessionViewModel: ObservableObject {
             state = .listening
             errorMessage = nil
         } catch {
+            print("[Speech] startListening failed: \(error)")
             errorMessage = "Mic: \(error.localizedDescription)"
         }
     }

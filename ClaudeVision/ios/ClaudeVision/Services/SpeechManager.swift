@@ -132,7 +132,7 @@ class SpeechManager: NSObject, ObservableObject {
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let audioEngine = AVAudioEngine()
+    private var audioEngine = AVAudioEngine()
 
     // TTS — ElevenLabs (direct REST, no package)
     private var elevenLabsClient: ElevenLabsTTSClient?
@@ -197,8 +197,9 @@ class SpeechManager: NSObject, ObservableObject {
         // Reconfigure audio session for recording
         try? AudioSessionManager.shared.configureForVoiceChat()
 
-        // Reset audio engine to pick up current route (iPhone mic vs Bluetooth)
-        audioEngine.reset()
+        // Fresh engine so the input node matches the current route (iPhone mic vs
+        // glasses Bluetooth HFP); a reused engine keeps a stale format and fails to start
+        audioEngine = AVAudioEngine()
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
