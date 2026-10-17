@@ -531,4 +531,10 @@ log(`   Dashboard:  http://localhost:${PORT}`)
 log(`   Enter token in iOS app → Settings → Channel Token`)
 
 // Auto-open dashboard in default browser
-Bun.spawn(['open', `http://localhost:${PORT}`], { stdout: 'ignore', stderr: 'ignore' })
+// (macOS: open, Linux: xdg-open; headless hosts have neither, so never crash on it)
+const opener = process.platform === 'darwin' ? 'open' : 'xdg-open'
+if (Bun.which(opener)) {
+  try {
+    Bun.spawn([opener, `http://localhost:${PORT}`], { stdout: 'ignore', stderr: 'ignore' })
+  } catch {}
+}
