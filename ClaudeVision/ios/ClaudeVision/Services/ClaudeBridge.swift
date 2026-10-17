@@ -29,6 +29,7 @@ class ClaudeBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private let maxReconnectAttempts = 5
     private var isManualDisconnect = false
     private var pingTimer: Timer?
+    private var reconnectWorkItem: DispatchWorkItem?
 
     init(config: ClaudeConfig) {
         self.config = config
@@ -44,6 +45,14 @@ class ClaudeBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     func connectWebSocket() {
         isManualDisconnect = false
         reconnectAttempts = 0
+        openWebSocket()
+    }
+
+    /// Opens a socket, first closing any previous one so only one connection exists.
+    private func openWebSocket() {
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        tearDownSocket()
 
         let wsURL = config.wsURL
         print("[Bridge] Connecting WebSocket to \(wsURL)")
@@ -62,17 +71,30 @@ class ClaudeBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
 
     func disconnect() {
         isManualDisconnect = true
-        pingTimer?.invalidate()
-        pingTimer = nil
-        webSocket?.cancel(with: .goingAway, reason: nil)
-        webSocket = nil
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        tearDownSocket()
         isConnected = false
         onDisconnect?()
     }
 
+    private func tearDownSocket() {
+        pingTimer?.invalidate()
+        pingTimer = nil
+        webSocket?.cancel(with: .goingAway, reason: nil)
+        webSocket = nil
+        // URLSession retains its delegate until invalidated; without this every
+        // reconnect leaked a session whose socket stayed open on the server
+        urlSession?.invalidateAndCancel()
+        urlSession = nil
+    }
+
     private func receiveMessage() {
-        webSocket?.receive { [weak self] result in
+        guard let task = webSocket else { return }
+        task.receive { [weak self] result in
             guard let self else { return }
+            // Ignore callbacks from sockets we've already replaced or closed
+            guard task === self.webSocket else { return }
             switch result {
             case .success(let message):
                 switch message {
@@ -238,6 +260,8 @@ class ClaudeBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     // MARK: - Reconnection
 
     private func attemptReconnect() {
+        // Receive-failure and didClose both report the same drop; schedule only once
+        guard reconnectWorkItem == nil else { return }
         guard !isManualDisconnect, reconnectAttempts < maxReconnectAttempts else {
             print("[Bridge] Giving up reconnection after \(reconnectAttempts) attempts")
             return
@@ -245,9 +269,11 @@ class ClaudeBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         reconnectAttempts += 1
         let delay = min(Double(reconnectAttempts) * 2.0, 10.0)
         print("[Bridge] Reconnecting in \(delay)s (attempt \(reconnectAttempts))")
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.connectWebSocket()
+        let work = DispatchWorkItem { [weak self] in
+            self?.openWebSocket()
         }
+        reconnectWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func startPingTimer() {
@@ -270,8 +296,9 @@ class ClaudeBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         print("[Bridge] WebSocket closed: \(closeCode)")
         DispatchQueue.main.async { [weak self] in
-            self?.isConnected = false
-            self?.attemptReconnect()
+            guard let self, webSocketTask === self.webSocket else { return }
+            self.isConnected = false
+            self.attemptReconnect()
         }
     }
 
